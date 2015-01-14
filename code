@@ -1,0 +1,206 @@
+package com.example.imei_upload_demo;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.List;
+
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.entity.UrlEncodedFormEntity;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.message.BasicNameValuePair;
+import org.apache.http.util.EntityUtils;
+
+import android.app.Activity;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Message;
+import android.telephony.TelephonyManager;
+import android.util.Log;
+import android.view.View;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.Toast;
+
+import com.mediatek.telephony.SimInfoManager;
+import com.mediatek.telephony.SimInfoManager.SimInfoRecord;
+
+public class MainActivity extends Activity {
+	
+	private final static String URL="http://chinaimei.sangfei.com/imeipost.asp";
+	private final static String CertificationID = "SF_CHINAIMEI_D1D4S237DHJ";
+	private Button upload;
+	private EditText text; 
+	ArrayList<BasicNameValuePair> upload_values=new ArrayList<BasicNameValuePair>();
+	List<SimInfoRecord> simList=new ArrayList<SimInfoManager.SimInfoRecord>();
+	TelephonyManager tm;
+//	Thread thread;
+	String phoneNumber=null;
+	String imeiNumber=null;
+//	private boolean isThreadOn=true;
+	Handler handler=new Handler(){
+
+		@Override
+		public void handleMessage(Message msg) {
+			// TODO Auto-generated method stub
+			super.handleMessage(msg);
+			switch(msg.what){
+			case 0x1:
+				Toast.makeText(MainActivity.this, "No NetWork", Toast.LENGTH_SHORT).show();
+				break;
+			case 0x2:
+				Toast.makeText(MainActivity.this, "记录失败", Toast.LENGTH_SHORT).show();
+				break;
+			case 0x3:
+				Toast.makeText(MainActivity.this, "上传并记录成功", Toast.LENGTH_SHORT).show();
+				break;
+			case 0x4:
+				Toast.makeText(MainActivity.this, "IMEI已经存在或重复提交", Toast.LENGTH_SHORT).show();
+				break;
+			case 0x5:
+				Toast.makeText(MainActivity.this, "超时为10分钟", Toast.LENGTH_SHORT).show();
+				break;
+			}
+		}
+	};
+	
+	@Override
+	protected void onCreate(Bundle savedInstanceState) {
+		super.onCreate(savedInstanceState);
+		setContentView(R.layout.activity_main);
+		tm=(TelephonyManager)getSystemService(TELEPHONY_SERVICE);	
+		upload=(Button)findViewById(R.id.upload);
+		//get sim phoneNumber
+		phoneNumber=getPhoneNumber();
+		//fetch the imei NO
+		imeiNumber=tm.getDeviceId();
+		
+		text=(EditText)findViewById(R.id.text);
+//		imeiNumber=text.getText().toString();
+		text.setText(phoneNumber+";"+imeiNumber);
+		upload.setOnClickListener(new View.OnClickListener() {
+			
+			@Override
+			public void onClick(View view) {
+				// TODO Auto-generated method stub
+				new Thread(new Runnable() {
+					
+					@Override
+					public void run() {
+						// TODO Auto-generated method stub
+//						imeiNumber=text.getText().toString();
+						Log.e("imei",imeiNumber);
+						// upload info
+						upLoadMessage(phoneNumber, imeiNumber);
+						}
+				}).start();
+			}
+		});
+	}
+	
+	public String getPhoneNumber(){
+		simList=SimInfoManager.getInsertedSimInfoList(this);
+		int size=simList.size();
+		if(size==0){
+			upload.setEnabled(false);
+			return null;
+		}
+		else if(size==1){
+			phoneNumber=simList.get(0).mNumber;
+			return phoneNumber;
+		}else{
+			for(int i=0;i<size;i++){
+				phoneNumber=simList.get(i).mNumber;
+			}
+		}
+		return phoneNumber;
+	}
+	
+	public void upLoadMessage(String phoneNumber,String imeiNumber){
+		upload_values.add(new BasicNameValuePair("CertificationID", CertificationID));
+		upload_values.add(new BasicNameValuePair("IMEI1", imeiNumber));
+		upload_values.add(new BasicNameValuePair("PhoneNumber", phoneNumber));
+		ConnectivityManager cm=(ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE);
+		NetworkInfo networkInfo=cm.getActiveNetworkInfo();
+		if(networkInfo==null || !networkInfo.isAvailable())
+		{
+			Message msg=handler.obtainMessage(0x1);
+			handler.sendMessage(msg);
+		}
+		else
+		{
+			HttpPost post=new HttpPost(URL);
+			DefaultHttpClient client=new DefaultHttpClient();//http客户端
+			try
+			{
+				 UrlEncodedFormEntity entity = new UrlEncodedFormEntity(upload_values, "utf-8");			
+				 /*
+				  * 将POST数据放入HTTP请求
+				  */
+				 post.setEntity(entity);
+				 /*
+				  * 发出实际的HTTP POST请求
+				  */
+				 HttpResponse response=client.execute(post);
+				 HttpEntity response_entity=response.getEntity();
+				 InputStream is=response_entity.getContent();
+				 String returnMessage=convertStreamToString(is);
+				 Log.e("imei", returnMessage);
+				 if(returnMessage.toLowerCase().contains("false")){
+					 handler.sendMessage(handler.obtainMessage(0x2));
+					 Log.e("imei","0x2");
+				 }else if(returnMessage.toLowerCase().contains("true")){
+					 handler.sendMessage(handler.obtainMessage(0x3));
+					 Log.e("imei","0x3");
+				 }else if(returnMessage.toLowerCase().contains("repeatimei")){
+					 handler.sendMessage(handler.obtainMessage(0x4));
+					 Log.e("imei","0x4");
+				 }else{
+					 handler.sendMessage(handler.obtainMessage(0x5));
+					 Log.e("imei","0x5");
+				 }
+				 
+			}catch(IllegalStateException e){
+				e.printStackTrace();
+			}catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+	}	
+	
+	public String convertStreamToString(InputStream is){
+		BufferedReader br=new BufferedReader(new InputStreamReader(is));
+		StringBuffer sb=new StringBuffer();
+		String line=null;
+				try
+				{
+					while((line=br.readLine())!=null)
+					{
+						sb.append(line);
+					}
+				}catch(IOException e){
+					e.printStackTrace();
+				}finally{
+					try{
+						is.close();
+					}catch(Exception e)
+					{
+						e.printStackTrace();
+					}
+				}
+				return sb.toString();
+		}
+
+	@Override
+	protected void onDestroy() {
+		// TODO Auto-generated method stub
+		super.onDestroy();
+//		thread.stop();
+	}
+}
